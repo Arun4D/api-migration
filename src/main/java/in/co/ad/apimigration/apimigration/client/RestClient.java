@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import io.micrometer.common.util.StringUtils;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -18,14 +19,18 @@ public class RestClient <T>{
     private final RestTemplate restTemplate;
 
     @SuppressWarnings(value = { "unchecked" })
-    public T invoke(String url, String userName, String password, Class<?> clazz) {
+    public T invoke(String url, HttpMethod httpMethod, T body, String userName, String password, Class<?> clazz) {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
-        headers.setBasicAuth(userName, password);
-        HttpEntity<String> entity = new HttpEntity<>("body",headers);
+        
+        if (!StringUtils.isBlank(password) && !StringUtils.isBlank(userName)) {
+            headers.setBasicAuth(userName, password);
+        }
+        
+        HttpEntity<T> entity = new HttpEntity<>(body,headers);
 
-        ResponseEntity<?> result =  restTemplate.exchange(url, HttpMethod.GET, entity, clazz);
+        ResponseEntity<?> result =  restTemplate.exchange(url, httpMethod, entity, clazz);
 
         return (T) result.getBody();
     }
