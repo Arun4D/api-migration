@@ -3,9 +3,7 @@ package in.co.ad.apimigration.apimigration.kong.dto;
 import lombok.Data;
 
 @Data
-public class NewServiceRequestDto {
+public class UpdateServiceRequestDto {
 
-    private String name;
-    private String url;
     private String host;
 }

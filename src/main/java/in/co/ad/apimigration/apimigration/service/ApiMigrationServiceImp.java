@@ -1,7 +1,9 @@
 package in.co.ad.apimigration.apimigration.service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpMethod;
@@ -21,7 +23,11 @@ import in.co.ad.apimigration.apimigration.kong.dto.NewServiceReplyDto;
 import in.co.ad.apimigration.apimigration.kong.dto.NewServiceRequestDto;
 import in.co.ad.apimigration.apimigration.kong.dto.NewUpstreamReplyDto;
 import in.co.ad.apimigration.apimigration.kong.dto.NewUpstreamRequestDto;
+import in.co.ad.apimigration.apimigration.kong.dto.NewUpstreamTargetReplyDto;
+import in.co.ad.apimigration.apimigration.kong.dto.NewUpstreamTargetRequestDto;
 import in.co.ad.apimigration.apimigration.kong.dto.ServiceReplyDto;
+import in.co.ad.apimigration.apimigration.kong.dto.UpdateServiceReplyDto;
+import in.co.ad.apimigration.apimigration.kong.dto.UpdateServiceRequestDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,14 +45,15 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
         List<SourceApiMappingDto> sourceApiMapping = new ArrayList<>();
 
         String apigeeBaseUrl = migrationConfig.getApigeeConfig().getBaseUrl() + "/"
-                + migrationConfig.getApigeeConfig().getBaseVersion() + "/organizations/";
+                + migrationConfig.getApigeeConfig().getBaseVersion() + "/organizations/"
+                + migrationConfig.getApigeeConfig().getOrganizationsName();
 
         String apigeeUrl = apigeeBaseUrl +  "/apis";
-        String apigeeEnvUrl = apigeeBaseUrl +  "/environment";
+        String apigeeEnvUrl = apigeeBaseUrl +  "/environments";
 
         List<String> apiList = getApigeeApis(apigeeUrl);
 
-        log.info("Before apply filter: ", apiList.toString());
+        log.info("Before apply filter: ", apiList);
 
         List<String> apiIncludeList = migrationConfig.getApigeeConfig().getIncludeApiList();
         List<String> apiExcludeList = migrationConfig.getApigeeConfig().getExcludeApiList();
@@ -125,7 +132,24 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                     .filter(server -> serverList.stream().anyMatch(apiServer -> apiServer.equals(server)))
                     .map(server -> getApigeeEnvironmentServer(apigeeEnvUrl + "/" + env + "/targetservers" + "/" + server)).collect(Collectors.toList());
                     
-                    apiMappingDto.setTargets(servers.stream().map(apiTarget -> apiTarget.getHost() + ":" + apiTarget.getPort()).collect(Collectors.toList()));
+                    if (servers.stream().findFirst().isPresent()) {
+                        ApiTargetServerDto server = servers.stream().findFirst().get();
+                        String url = server.getPort() == 443 ? "https://" : "http://";
+                        url = url + server.getHost()+ ":" +server.getPort();
+                        apiMappingDto.setServiceUrl(url);
+                    }
+
+                    List<String> targetServerList =servers.stream().map(apiTarget -> apiTarget.getHost() + ":" + apiTarget.getPort()).collect(Collectors.toList());
+
+                    List<String> targetsPerEnv = null;
+                    if (apiMappingDto.getTargets() == null || apiMappingDto.getTargets().isEmpty()) {
+                        targetsPerEnv = new ArrayList<>();
+                    } else {
+                        targetsPerEnv = apiMappingDto.getTargets();   
+                    }
+                    targetsPerEnv.addAll(targetServerList);
+
+                    apiMappingDto.setTargets(targetsPerEnv.stream().distinct().collect(Collectors.toList()));
                      
             });
 
@@ -149,7 +173,7 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
 
         String kongUrl = migrationConfig.getKongConfig().getBaseUrl() + "/services";
 
-        String kongUpstreamUrl = migrationConfig.getKongConfig().getBaseUrl() + "/upstream";
+        String kongUpstreamUrl = migrationConfig.getKongConfig().getBaseUrl() + "/upstreams";
 
         ServiceReplyDto serviceReplyDto = getKongServices(kongUrl);
 
@@ -163,13 +187,31 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                     NewServiceReplyDto newServiceReplyDto = null;
 
                     if (count == 0) {
+                        NewUpstreamRequestDto newUpstreamRequestDto = new NewUpstreamRequestDto();
+                        newUpstreamRequestDto.setName(mapping.getUpstreamName());
+
+                        NewUpstreamReplyDto newUpstreamReplyDto = createKongUpstream(kongUpstreamUrl, newUpstreamRequestDto);
+
+                        log.info("Kong new Upstream: ", newUpstreamReplyDto);
+
+                        mapping.getTargets().stream().map(target -> createKongUpstreamTarget(kongUpstreamUrl + "/" +  mapping.getUpstreamName() + "/targets", getNewUpstreamTarget(target))).collect(Collectors.toList()); 
+                      
+
                         NewServiceRequestDto requestDto = new NewServiceRequestDto();
                         requestDto.setName(mapping.getServiceName());
                         requestDto.setUrl(mapping.getServiceUrl());
+                        //requestDto.setHost(mapping.getUpstreamName());
 
                         newServiceReplyDto = createKongServices(kongUrl, requestDto);
 
                         log.info("Kong new Service: ", newServiceReplyDto);
+
+                        UpdateServiceRequestDto updateRequestDto = new UpdateServiceRequestDto();
+                        updateRequestDto.setHost(mapping.getUpstreamName());
+
+                        UpdateServiceReplyDto updateServiceReplyDto = updateKongServices(kongUrl + "/" + mapping.getServiceName(), updateRequestDto);
+
+                        log.info("Kong update Service with upstream: ", updateServiceReplyDto);
 
                     }
 
@@ -177,7 +219,7 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                         NewRouteRequestDto requestDto = new NewRouteRequestDto();
                         requestDto.setName(mapping.getRouteName());
                         requestDto.setPaths(mapping.getRoutePaths());
-                        String routeKongUrl = kongUrl + "/" + mapping.getServiceName();
+                        String routeKongUrl = kongUrl + "/" + mapping.getServiceName() + "/routes" ;
 
                         NewRouteReplyDto replyDto = createKongRoutes(routeKongUrl, requestDto);
 
@@ -186,6 +228,12 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                     }
                 });
 
+    }
+
+    private NewUpstreamTargetRequestDto getNewUpstreamTarget(String target) {
+        NewUpstreamTargetRequestDto dto = new NewUpstreamTargetRequestDto();
+        dto.setTarget(target);
+        return dto;
     }
 
     private List<String> getApigeeApis(String apigeeUrl) {
@@ -281,6 +329,16 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
         return newUpstreamReplyDto;
     }
 
+    private NewUpstreamTargetReplyDto createKongUpstreamTarget(String kongUrl, NewUpstreamTargetRequestDto requestDto) {
+        T result = client.invoke(kongUrl, HttpMethod.POST, (T) requestDto,
+                migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
+                NewUpstreamTargetReplyDto.class);
+
+                NewUpstreamTargetReplyDto newUpstreamTargetReplyDto = NewUpstreamTargetReplyDto.class.cast(result);
+
+        return newUpstreamTargetReplyDto;
+    }
+
     private NewServiceReplyDto createKongServices(String kongUrl, NewServiceRequestDto requestDto) {
         T result = client.invoke(kongUrl, HttpMethod.POST, (T) requestDto,
                 migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
@@ -289,6 +347,16 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
         NewServiceReplyDto newServiceReplyDto = NewServiceReplyDto.class.cast(result);
 
         return newServiceReplyDto;
+    }
+
+    private UpdateServiceReplyDto updateKongServices(String kongUrl, UpdateServiceRequestDto requestDto) {
+        T result = client.invoke(kongUrl, HttpMethod.PUT, (T) requestDto,
+                migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
+                UpdateServiceReplyDto.class);
+
+                UpdateServiceReplyDto updateServiceReplyDto = UpdateServiceReplyDto.class.cast(result);
+
+        return updateServiceReplyDto;
     }
 
     private NewRouteReplyDto createKongRoutes(String kongUrl, NewRouteRequestDto requestDto) {
