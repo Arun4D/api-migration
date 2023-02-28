@@ -153,20 +153,6 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                      
             });
 
-            /* List<ApiTargetServerDto> servers = targetServers.stream()
-                .map(server -> getApigeeEnvironmentServer(apigeeEnvUrl + "/" + env + "/targetservers" + "/" + server))
-                    .flatMap(list -> list.stream()).collect(Collectors.toList());
-
-            // urlList = urlList.stream().distinct().collect(Collectors.toList());
-
-            if (!CollectionUtils.isEmpty(urlList)) {
-                apiMappingDto.setServiceUrl(urlList.get(0));
-            } else {
-                apiMappingDto.setValidationFailed(true);
-                apiMappingDto.setValidationFailedMessage("Service Url is empty.");
-                // throw error
-            }
- */
             sourceApiMapping.add(apiMappingDto);
 
         });
