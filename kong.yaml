@@ -1,0 +1,14 @@
+_format_version: "3.0"
+_transform: true
+services:
+- host: "Weather-API_upstream"
+  name: "Weather-API_service"
+  routes:
+  - name: "Weather-API_route"
+    paths:
+    - "/weather-api"
+  url: "https://api.weatherapi.com:443"
+upstreams:
+- name: "Weather-API_upstream"
+  targets:
+  - target: "api.weatherapi.com:443"

@@ -14,5 +14,6 @@ public class KongConfigProperties {
     private String baseUrl;
     private String baseVersion;
     private String userName;
-    private String password; 
+    private String password;
+    private boolean dbLess; 
 }

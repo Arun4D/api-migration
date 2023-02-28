@@ -2,6 +2,7 @@ plugins {
 	id 'java'
 	id 'org.springframework.boot' version '3.0.2'
 	id 'io.spring.dependency-management' version '1.1.0'
+	id "org.jsonschema2pojo" version "1.2.1"
 }
 
 group = 'in.co.ad.apimigration'
@@ -24,9 +25,18 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
+	implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.13.4'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
 tasks.named('test') {
 	useJUnitPlatform()
+}
+
+
+jsonSchema2Pojo{
+	includeAdditionalProperties = true
+	inclusionLevel =  org.jsonschema2pojo.InclusionLevel.NON_EMPTY
+	targetDirectory = file("${project.projectDir}/src/main/java")
+	targetPackage = 'in.co.ad.apimigration.apimigration.kong.dto.generated'
 }

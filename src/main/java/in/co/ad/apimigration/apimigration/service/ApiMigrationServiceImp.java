@@ -1,14 +1,21 @@
 package in.co.ad.apimigration.apimigration.service;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.core.exc.StreamWriteException;
+import com.fasterxml.jackson.databind.DatabindException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiProxyDto;
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiRevisionDto;
@@ -28,6 +35,12 @@ import in.co.ad.apimigration.apimigration.kong.dto.NewUpstreamTargetRequestDto;
 import in.co.ad.apimigration.apimigration.kong.dto.ServiceReplyDto;
 import in.co.ad.apimigration.apimigration.kong.dto.UpdateServiceReplyDto;
 import in.co.ad.apimigration.apimigration.kong.dto.UpdateServiceRequestDto;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.FRoute;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.FService;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.FTarget;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.FUpstream;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.KongJsonSchema;
+import in.co.ad.apimigration.apimigration.kong.dto.generated.Upstream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -48,8 +61,8 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                 + migrationConfig.getApigeeConfig().getBaseVersion() + "/organizations/"
                 + migrationConfig.getApigeeConfig().getOrganizationsName();
 
-        String apigeeUrl = apigeeBaseUrl +  "/apis";
-        String apigeeEnvUrl = apigeeBaseUrl +  "/environments";
+        String apigeeUrl = apigeeBaseUrl + "/apis";
+        String apigeeEnvUrl = apigeeBaseUrl + "/environments";
 
         List<String> apiList = getApigeeApis(apigeeUrl);
 
@@ -115,104 +128,176 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                     .collect(Collectors.toList());
 
             List<String> serverList = apiTargetList.stream()
-                .map(apiTarget -> apiTarget.getConnection().getLoadBalancer().getServer()
-                    .stream()
-                        .map(server-> server.getName())
-                        .collect(Collectors.toList()))
-                .flatMap(list-> list.stream())
-                .collect(Collectors.toList());
-
+                    .map(apiTarget -> apiTarget.getConnection().getLoadBalancer().getServer()
+                            .stream()
+                            .map(server -> server.getName())
+                            .collect(Collectors.toList()))
+                    .flatMap(list -> list.stream())
+                    .collect(Collectors.toList());
 
             List<String> environments = getApigeeAllEnv(apigeeEnvUrl);
 
             environments.stream().forEach(env -> {
 
                 List<String> targetServers = getApigeeAllEnvTargetServer(apigeeEnvUrl + "/" + env + "/targetservers");
-                List<ApiTargetServerDto> servers =  targetServers.stream()
-                    .filter(server -> serverList.stream().anyMatch(apiServer -> apiServer.equals(server)))
-                    .map(server -> getApigeeEnvironmentServer(apigeeEnvUrl + "/" + env + "/targetservers" + "/" + server)).collect(Collectors.toList());
-                    
-                    if (servers.stream().findFirst().isPresent()) {
-                        ApiTargetServerDto server = servers.stream().findFirst().get();
-                        String url = server.getPort() == 443 ? "https://" : "http://";
-                        url = url + server.getHost()+ ":" +server.getPort();
-                        apiMappingDto.setServiceUrl(url);
-                    }
+                List<ApiTargetServerDto> servers = targetServers.stream()
+                        .filter(server -> serverList.stream().anyMatch(apiServer -> apiServer.equals(server)))
+                        .map(server -> getApigeeEnvironmentServer(
+                                apigeeEnvUrl + "/" + env + "/targetservers" + "/" + server))
+                        .collect(Collectors.toList());
 
-                    List<String> targetServerList =servers.stream().map(apiTarget -> apiTarget.getHost() + ":" + apiTarget.getPort()).collect(Collectors.toList());
+                if (servers.stream().findFirst().isPresent()) {
+                    ApiTargetServerDto server = servers.stream().findFirst().get();
+                    String url = server.getPort() == 443 ? "https://" : "http://";
+                    url = url + server.getHost() + ":" + server.getPort();
+                    apiMappingDto.setServiceUrl(url);
+                }
 
-                    List<String> targetsPerEnv = null;
-                    if (apiMappingDto.getTargets() == null || apiMappingDto.getTargets().isEmpty()) {
-                        targetsPerEnv = new ArrayList<>();
-                    } else {
-                        targetsPerEnv = apiMappingDto.getTargets();   
-                    }
-                    targetsPerEnv.addAll(targetServerList);
+                List<String> targetServerList = servers.stream()
+                        .map(apiTarget -> apiTarget.getHost() + ":" + apiTarget.getPort()).collect(Collectors.toList());
 
-                    apiMappingDto.setTargets(targetsPerEnv.stream().distinct().collect(Collectors.toList()));
-                     
+                List<String> targetsPerEnv = null;
+                if (apiMappingDto.getTargets() == null || apiMappingDto.getTargets().isEmpty()) {
+                    targetsPerEnv = new ArrayList<>();
+                } else {
+                    targetsPerEnv = apiMappingDto.getTargets();
+                }
+                targetsPerEnv.addAll(targetServerList);
+
+                apiMappingDto.setTargets(targetsPerEnv.stream().distinct().collect(Collectors.toList()));
+
             });
 
             sourceApiMapping.add(apiMappingDto);
 
         });
 
-        String kongUrl = migrationConfig.getKongConfig().getBaseUrl() + "/services";
+        if (migrationConfig.getKongConfig().isDbLess()) {
 
-        String kongUpstreamUrl = migrationConfig.getKongConfig().getBaseUrl() + "/upstreams";
+            KongJsonSchema schema = new KongJsonSchema();
+            schema.setFormatVersion("3.0");
+            schema.setTransform(true);
+            
+            List<FService> servicesList = new ArrayList<>();
+            List<FUpstream> upstreamList = new ArrayList<>();
 
-        ServiceReplyDto serviceReplyDto = getKongServices(kongUrl);
+            sourceApiMapping.stream().forEach(mapping -> {
 
-        sourceApiMapping.stream()
-                .filter(mapping -> mapping.isValidationFailed() == false)
-                .forEach(mapping -> {
+                FService service = new FService();
+                service.setName(mapping.getServiceName());
+                service.setUrl(mapping.getServiceUrl());
+                service.setHost(mapping.getServiceHost());
+                
+                List<FRoute> routes = new ArrayList<>();
+                FRoute route = new FRoute();
+                route.setName(mapping.getRouteName());
+                route.setPaths(mapping.getRoutePaths());
 
-                    long count = serviceReplyDto.getData().stream()
-                            .filter(data -> data.getName().equalsIgnoreCase(mapping.getServiceName() + "_service"))
-                            .count();
-                    NewServiceReplyDto newServiceReplyDto = null;
+                //route.setProtocols(List.of("http", "https"));
+                
+                routes.add(route);
+                service.setRoutes(routes);
 
-                    if (count == 0) {
-                        NewUpstreamRequestDto newUpstreamRequestDto = new NewUpstreamRequestDto();
-                        newUpstreamRequestDto.setName(mapping.getUpstreamName());
+                servicesList.add(service);
+                
+                FUpstream upstream = new FUpstream();
+                upstream.setName(mapping.getUpstreamName());
+                
+                List<FTarget> targets = new ArrayList<>();
+                mapping.getTargets().stream().forEach(targetValue -> {
+                    FTarget target = new FTarget();
+                    target.setTarget(targetValue);
 
-                        NewUpstreamReplyDto newUpstreamReplyDto = createKongUpstream(kongUpstreamUrl, newUpstreamRequestDto);
+                    //Upstream upstreamValue = new Upstream();
+                    //upstreamValue.setName(mapping.getUpstreamName());
 
-                        log.info("Kong new Upstream: ", newUpstreamReplyDto);
-
-                        mapping.getTargets().stream().map(target -> createKongUpstreamTarget(kongUpstreamUrl + "/" +  mapping.getUpstreamName() + "/targets", getNewUpstreamTarget(target))).collect(Collectors.toList()); 
-                      
-
-                        NewServiceRequestDto requestDto = new NewServiceRequestDto();
-                        requestDto.setName(mapping.getServiceName());
-                        requestDto.setUrl(mapping.getServiceUrl());
-                        //requestDto.setHost(mapping.getUpstreamName());
-
-                        newServiceReplyDto = createKongServices(kongUrl, requestDto);
-
-                        log.info("Kong new Service: ", newServiceReplyDto);
-
-                        UpdateServiceRequestDto updateRequestDto = new UpdateServiceRequestDto();
-                        updateRequestDto.setHost(mapping.getUpstreamName());
-
-                        UpdateServiceReplyDto updateServiceReplyDto = updateKongServices(kongUrl + "/" + mapping.getServiceName(), updateRequestDto);
-
-                        log.info("Kong update Service with upstream: ", updateServiceReplyDto);
-
-                    }
-
-                    if (newServiceReplyDto != null) {
-                        NewRouteRequestDto requestDto = new NewRouteRequestDto();
-                        requestDto.setName(mapping.getRouteName());
-                        requestDto.setPaths(mapping.getRoutePaths());
-                        String routeKongUrl = kongUrl + "/" + mapping.getServiceName() + "/routes" ;
-
-                        NewRouteReplyDto replyDto = createKongRoutes(routeKongUrl, requestDto);
-
-                        log.info("Kong new Route: ", replyDto);
-
-                    }
+                    //target.setUpstream(upstreamValue);
+                    targets.add(target);
                 });
+                
+                upstream.setTargets(targets);
+                upstreamList.add(upstream);
+            });
+           
+            schema.setServices(servicesList);
+            schema.setUpstreams(upstreamList);
+
+            ObjectMapper mapper = YAMLMapper.builder().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER).build();
+            try {
+                mapper.setSerializationInclusion(Include.NON_NULL);
+                mapper.setSerializationInclusion(Include.NON_EMPTY);
+                mapper.writeValue(new File("./kong.yaml"), schema);
+            } catch (StreamWriteException e) {
+                e.printStackTrace();
+            } catch (DatabindException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+
+            String kongUrl = migrationConfig.getKongConfig().getBaseUrl() + "/services";
+
+            String kongUpstreamUrl = migrationConfig.getKongConfig().getBaseUrl() + "/upstreams";
+
+            ServiceReplyDto serviceReplyDto = getKongServices(kongUrl);
+
+            sourceApiMapping.stream()
+                    .filter(mapping -> mapping.isValidationFailed() == false)
+                    .forEach(mapping -> {
+
+                        long count = serviceReplyDto.getData().stream()
+                                .filter(data -> data.getName().equalsIgnoreCase(mapping.getServiceName() + "_service"))
+                                .count();
+                        NewServiceReplyDto newServiceReplyDto = null;
+
+                        if (count == 0) {
+                            NewUpstreamRequestDto newUpstreamRequestDto = new NewUpstreamRequestDto();
+                            newUpstreamRequestDto.setName(mapping.getUpstreamName());
+
+                            NewUpstreamReplyDto newUpstreamReplyDto = createKongUpstream(kongUpstreamUrl,
+                                    newUpstreamRequestDto);
+
+                            log.info("Kong new Upstream: ", newUpstreamReplyDto);
+
+                            mapping.getTargets().stream()
+                                    .map(target -> createKongUpstreamTarget(
+                                            kongUpstreamUrl + "/" + mapping.getUpstreamName() + "/targets",
+                                            getNewUpstreamTarget(target)))
+                                    .collect(Collectors.toList());
+
+                            NewServiceRequestDto requestDto = new NewServiceRequestDto();
+                            requestDto.setName(mapping.getServiceName());
+                            requestDto.setUrl(mapping.getServiceUrl());
+                            // requestDto.setHost(mapping.getUpstreamName());
+
+                            newServiceReplyDto = createKongServices(kongUrl, requestDto);
+
+                            log.info("Kong new Service: ", newServiceReplyDto);
+
+                            UpdateServiceRequestDto updateRequestDto = new UpdateServiceRequestDto();
+                            updateRequestDto.setHost(mapping.getUpstreamName());
+
+                            UpdateServiceReplyDto updateServiceReplyDto = updateKongServices(
+                                    kongUrl + "/" + mapping.getServiceName(), updateRequestDto);
+
+                            log.info("Kong update Service with upstream: ", updateServiceReplyDto);
+
+                        }
+
+                        if (newServiceReplyDto != null) {
+                            NewRouteRequestDto requestDto = new NewRouteRequestDto();
+                            requestDto.setName(mapping.getRouteName());
+                            requestDto.setPaths(mapping.getRoutePaths());
+                            String routeKongUrl = kongUrl + "/" + mapping.getServiceName() + "/routes";
+
+                            NewRouteReplyDto replyDto = createKongRoutes(routeKongUrl, requestDto);
+
+                            log.info("Kong new Route: ", replyDto);
+
+                        }
+                    });
+        }
 
     }
 
@@ -310,7 +395,7 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                 migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
                 NewUpstreamReplyDto.class);
 
-                NewUpstreamReplyDto newUpstreamReplyDto = NewUpstreamReplyDto.class.cast(result);
+        NewUpstreamReplyDto newUpstreamReplyDto = NewUpstreamReplyDto.class.cast(result);
 
         return newUpstreamReplyDto;
     }
@@ -320,7 +405,7 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                 migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
                 NewUpstreamTargetReplyDto.class);
 
-                NewUpstreamTargetReplyDto newUpstreamTargetReplyDto = NewUpstreamTargetReplyDto.class.cast(result);
+        NewUpstreamTargetReplyDto newUpstreamTargetReplyDto = NewUpstreamTargetReplyDto.class.cast(result);
 
         return newUpstreamTargetReplyDto;
     }
@@ -340,7 +425,7 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
                 migrationConfig.getKongConfig().getUserName(), migrationConfig.getKongConfig().getPassword(),
                 UpdateServiceReplyDto.class);
 
-                UpdateServiceReplyDto updateServiceReplyDto = UpdateServiceReplyDto.class.cast(result);
+        UpdateServiceReplyDto updateServiceReplyDto = UpdateServiceReplyDto.class.cast(result);
 
         return updateServiceReplyDto;
     }
