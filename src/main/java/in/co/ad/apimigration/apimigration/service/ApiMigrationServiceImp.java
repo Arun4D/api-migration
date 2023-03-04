@@ -2,6 +2,11 @@ package in.co.ad.apimigration.apimigration.service;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -9,6 +14,8 @@ import java.util.stream.Collectors;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.core.exc.StreamWriteException;
@@ -18,9 +25,14 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiProxyDto;
+import in.co.ad.apimigration.apimigration.apigee.dto.ApiResourceFileDownloadDto;
+import in.co.ad.apimigration.apimigration.apigee.dto.ApiResourceFileUrlDto;
+import in.co.ad.apimigration.apimigration.apigee.dto.ApiResourceFilesDto;
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiRevisionDto;
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiTargetDto;
 import in.co.ad.apimigration.apimigration.apigee.dto.ApiTargetServerDto;
+import in.co.ad.apimigration.apimigration.apigee.dto.ApiTokenDto;
+import in.co.ad.apimigration.apimigration.apigee.dto.ApiTokenRequestDto;
 import in.co.ad.apimigration.apimigration.client.RestClient;
 import in.co.ad.apimigration.apimigration.config.MigrationConfig;
 import in.co.ad.apimigration.apimigration.dto.SourceApiMappingDto;
@@ -40,7 +52,6 @@ import in.co.ad.apimigration.apimigration.kong.dto.generated.FService;
 import in.co.ad.apimigration.apimigration.kong.dto.generated.FTarget;
 import in.co.ad.apimigration.apimigration.kong.dto.generated.FUpstream;
 import in.co.ad.apimigration.apimigration.kong.dto.generated.KongJsonSchema;
-import in.co.ad.apimigration.apimigration.kong.dto.generated.Upstream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -85,6 +96,20 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
 
         log.info("After apply filter: ", apiList.toString());
 
+        /*ApiTokenRequestDto tokenRequest = new ApiTokenRequestDto();
+        tokenRequest.setGrant_type("password");
+        tokenRequest.setUsername(migrationConfig.getApigeeConfig().getUserName());
+        tokenRequest.setPassword(migrationConfig.getApigeeConfig().getPassword());*/
+        
+        MultiValueMap<String, String> tokenRequest = new LinkedMultiValueMap<String, String>(); 
+        tokenRequest.add("grant_type", "password"); 
+        tokenRequest.add("username", migrationConfig.getApigeeConfig().getUserName());
+        tokenRequest.add("password", migrationConfig.getApigeeConfig().getPassword());
+
+        T result = client.invokeLogin(migrationConfig.getApigeeConfig().getTokenLoginBaseUrl(), HttpMethod.POST, (T) tokenRequest, migrationConfig.getApigeeConfig().getAuthToken(), ApiTokenDto.class);
+        
+        ApiTokenDto token = ApiTokenDto.class.cast(result);
+
         apiList.stream().forEach(api -> {
 
             SourceApiMappingDto apiMappingDto = new SourceApiMappingDto();
@@ -109,6 +134,39 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
             ApiRevisionDto getRevisions = getRevisions(apigeeUrlLocal);
 
             log.info("Latest Revision: ", getRevisions.toString());
+
+            String apigeeResourceUrl = apigeeUrlLocal + "/resourcefiles";
+            ApiResourceFilesDto files = getResourceFiles(apigeeResourceUrl);
+            List<ApiResourceFileDownloadDto> downloadResources = files.getResourceFile().stream().map(file-> getResourceFileUrlDownoad(apigeeResourceUrl , file.getType(), file.getName())).collect(Collectors.toList());
+            
+            downloadResources = downloadResources.stream().map(file -> {
+                String data = getApigeeResourceFileString("https://apigee.com"+file.getUrl(), token.getAccess_token());
+                ApiResourceFileDownloadDto downloadDto = new ApiResourceFileDownloadDto();
+                downloadDto.setData(data);
+                downloadDto.setName(file.getName());
+                downloadDto.setType(file.getType());
+                return downloadDto;
+            }).collect(Collectors.toList());
+            
+
+            downloadResources.stream().forEach(saveFile -> {
+                String fileName = removeExtension(saveFile.getName()) + ".yaml";
+                Path directory =  Paths.get(migrationConfig.getApigeeConfig().getOpenApiDownloadPath()); 
+                Path path = Paths.get(migrationConfig.getApigeeConfig().getOpenApiDownloadPath()+"/"+fileName); 
+	            try {
+                    if (!Files.exists(directory)) {
+                        Files.createDirectories(directory);
+                    } 
+                    if (!Files.exists(path)) {
+                        Files.createFile(path);
+                    } 
+
+                    Files.write(path, saveFile.getData().getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
+                    
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
 
             String apigeeUrlLocalProxy = apigeeUrlLocal + "/proxies";
             List<String> proxiesList = getApigeeAllProxies(apigeeUrlLocalProxy);
@@ -351,6 +409,46 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
         return revisions;
     }
 
+    private ApiResourceFilesDto getResourceFiles(String apigeeUrl) {
+
+        T result = client.invoke(apigeeUrl, HttpMethod.GET, (T) "body", migrationConfig.getApigeeConfig().getUserName(),
+                migrationConfig.getApigeeConfig().getPassword(), ApiResourceFilesDto.class);
+
+                ApiResourceFilesDto files = ApiResourceFilesDto.class.cast(result);
+
+        return files;
+    }
+
+    private ApiResourceFileDownloadDto getResourceFileUrlDownoad(String apigeeUrl, String type, String name) {
+        
+        ApiResourceFileUrlDto apiResourceFileUrlDto = getResourceFileUrl(apigeeUrl + "/" +type +"/" + name);
+
+        ApiResourceFileDownloadDto downloadData = new ApiResourceFileDownloadDto();
+        downloadData.setType(type);
+        downloadData.setName(name);
+        downloadData.setUrl(apiResourceFileUrlDto.getUrl());
+
+        return downloadData;
+    }
+    
+    private String getApigeeResourceFileString(String apigeeUrl, String bearerToken) {
+        T result = client.invokeSpecDownload(apigeeUrl, HttpMethod.GET, (T) "body",  bearerToken, String.class);
+
+        String downloadFileString = String.class.cast(result);
+
+        return downloadFileString;
+    }
+
+    private ApiResourceFileUrlDto getResourceFileUrl(String apigeeUrl) {
+
+        T result = client.invoke(apigeeUrl, HttpMethod.GET, (T) "body", migrationConfig.getApigeeConfig().getUserName(),
+                migrationConfig.getApigeeConfig().getPassword(), ApiResourceFileUrlDto.class);
+
+                ApiResourceFileUrlDto urls = ApiResourceFileUrlDto.class.cast(result);
+
+        return urls;
+    }
+
     private ApiProxyDto getApigeeApiProxy(String apigeeUrl) {
 
         T result = client.invoke(apigeeUrl, HttpMethod.GET, (T) "body", migrationConfig.getApigeeConfig().getUserName(),
@@ -440,4 +538,12 @@ public class ApiMigrationServiceImp<T> implements ApiMigrationService {
         return newRouteReplyDto;
     }
 
+    public String removeExtension(String fileName) {
+        if (fileName.indexOf(".") > 0) {
+            return fileName.substring(0, fileName.lastIndexOf("."));
+        } else {
+            return fileName;
+        }
+ 
+    }
 }

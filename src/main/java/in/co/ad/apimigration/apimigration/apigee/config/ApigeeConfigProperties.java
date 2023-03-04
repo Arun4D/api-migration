@@ -23,6 +23,9 @@ public class ApigeeConfigProperties {
     //@Value("#{'${includeApiList}'.split(',')}")
     private List<String> includeApiList; 
     //@Value("#{'${excludeApiList}'.split(',')}")
-    private List<String> excludeApiList; 
+    private List<String>  excludeApiList; 
+    private String authToken; 
+    private String tokenLoginBaseUrl; 
+    private String openApiDownloadPath; 
 }
 

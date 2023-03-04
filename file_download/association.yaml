@@ -1,0 +1,154 @@
+# Example OpenAPI YAML to get you started quickly.
+# Note: YAML has indentation based coping.
+# Code completion support is available so start typing for
+# available options.
+# This example follows the recommendations of the API 
+# Improvement Proposals for common API patterns. Find more
+# at https://google.aip.dev/
+
+# Find the full OpenAPI reference at:
+# https://github.com/OAI/OpenAPI-Specification
+openapi: 3.0.1
+
+# This is your document metadata.
+info:
+  version: 0.0.1
+  title: Weather API
+  description: |
+    A brief description of the API.
+    It can be multiple lines.
+
+    This API follows the recommendations of the
+    [API Improvement Proposals](https://google.aip.dev/).
+
+# Servers where this API is hosted
+servers: 
+  - url: https://api.weatherapi.com/v1
+  
+# Describe your paths here
+paths:
+  # This is a endpoint path.
+  '/current.json':
+    # This is an HTTP operation
+    get:
+      # Describe this verb here. Note: you can use markdown
+      summary: 'List Weather objects.'
+      description: "Retrieve a page of Weather details"
+      # This is an array of GET operation parameters:
+      parameters:
+        # An example parameter that is in query and is required
+        - name: key
+          in: query
+          description: "Max size of returned list" 
+          schema:
+            type: string
+            default: "dec2adb4babf4b398a755143222906"
+        - name: q
+          in: query
+          description: |
+            Name of the country
+          schema:
+            type: string
+        - name: aqi
+          in: query
+          description: |
+            Get air quality data
+          schema:
+            type: string
+            default: 'no'
+      # Expected responses for this operation:
+      responses:
+        # Response code
+        '200':
+          description: "Successful response"
+          # Response body content.
+          content:
+            # JSON response with a schema referenced from the  
+            # components object.
+            application/json:
+              schema:
+                type: object
+                properties:
+                  persons:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ListOfPersons'
+                  nextPageToken:
+                    description: |
+                      A token which can be sent as `pageToken`
+                      to retrieve the next page.
+                    type: string
+  '/forecast.json':
+    get:
+      description: 'Retrieve a single Person object.'
+      parameters:
+        - name: key
+          in: query
+          description: |
+            Max size of returned list. 
+          schema:
+            type: string
+            default: dec2adb4babf4b398a755143222906
+        - name: days
+          in: query
+          description: No of days 1 to 15
+          schema:
+            type: integer
+        - name: q
+          in: query
+          description: |
+            Name of the country
+          schema:
+            type: string
+        - name: aqi
+          in: query
+          description: |
+            Get air quality data
+          schema:
+            type: string
+            default: 'no'
+        - name: alerts
+          in: query
+          description: yes or no to get the alerts
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Person'
+        '404':
+          description: 'Person was not found'
+
+# Reusable components of your API belong here. Utilize
+# components with JSON references.
+components:
+  # Schemas is a map of names to Schema objects
+  schemas:
+    # A list of Person objects
+    ListOfPersons:
+      title: List of Persons
+      type: array
+      items:
+        $ref: '#/components/schemas/Person'
+    # A single person object
+    Person:
+      title: Person
+      type: object
+      properties:
+        name:
+          description: |
+            [Resource Name](https://aip.dev/122) of a person.
+            Format: `persons/{personId}`
+          type: string
+          example: "persons/a353-x51d"
+          pattern: 'persons\/[a-z0-9-]+'
+        displayName:
+          description: 'Display name of a person.'
+          type: string
+          example: "ApiPerson84"
+        subscribed:
+          description: 'Subscription state of a person'
+          type: boolean

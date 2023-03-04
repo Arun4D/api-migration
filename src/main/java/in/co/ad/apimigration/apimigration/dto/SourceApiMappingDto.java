@@ -13,6 +13,7 @@ public class SourceApiMappingDto {
     private String routeName;
     private List<String> routePaths;
     private List<String> targets;
+    private List<String> resourceFileUrl;
     private String tag;
     private boolean isValidationFailed;
     private String validationFailedMessage;

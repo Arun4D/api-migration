@@ -1,0 +1,27 @@
+_format_version: "1.1"
+services:
+  - name: Weather_API
+    protocol: https
+    host: api.weatherapi.com
+    port: 443
+    path: /v1
+    plugins: []
+    routes:
+      - tags:
+          &a1
+          - OAS3_import
+          - OAS3file_association.yaml
+        name: Weather_API-current.json-get
+        methods:
+          - GET
+        paths:
+          - /current.json$
+        strip_path: false
+      - tags: *a1
+        name: Weather_API-forecast.json-get
+        methods:
+          - GET
+        paths:
+          - /forecast.json$
+        strip_path: false
+    tags: *a1
